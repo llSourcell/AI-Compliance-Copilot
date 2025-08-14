@@ -1,0 +1,50 @@
+[tool.poetry]
+name = "compliance-copilot"
+version = "0.1.0"
+description = "Enterprise-grade RAG application for compliance."
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.109.0"
+uvicorn = {extras = ["standard"], version = "^0.27.0"}
+weaviate-client = "^4.4.4"
+pydantic = "^2.5.3"
+pydantic-settings = "^2.1.0"
+tenacity = "^8.2.3"
+python-dotenv = "^1.0.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+pytest-cov = "^4.1.0"
+mypy = "^1.8.0"
+ruff = "^0.2.0"
+pre-commit = "^3.6.0"
+httpx = "^0.26.0"
+
+[tool.ruff]
+line-length = 88
+select = ["E", "F", "I", "W", "C90", "B", "A", "UP", "S"]
+ignore = ["B905"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+strict = true
+ignore_missing_imports = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
