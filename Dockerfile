@@ -11,6 +11,7 @@ ENV POETRY_NO_INTERACTION=1 \
 COPY pyproject.toml poetry.lock* ./
 
 RUN pip install poetry && \
+    poetry lock && \
     poetry install --only main --no-root && \
     rm -rf $POETRY_CACHE_DIR
 
@@ -22,10 +23,11 @@ WORKDIR /app
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONUNBUFFERED=1
 
+RUN apt-get update && apt-get install -y curl
+
 COPY --from=builder /app/.venv ./.venv
 COPY src/ ./src
 
 EXPOSE 8000
 
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
-
+CMD ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "-w", "2", "-b", "0.0.0.0:8000", "src.main:app"]

@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     WEAVIATE_URL: str = "http://weaviate:8080"
     EMBEDDING_MODEL: str = "BAAI/bge-large-en-v1.5"
     RERANKER_MODEL: str = "BAAI/bge-reranker-large"
-    OPENAI_API_KEY: str = "your_key_here"
+    OPENAI_API_KEY: str
 
     class Config:
         case_sensitive = True

@@ -1,5 +1,8 @@
 version: '3.8'
 
+networks:
+  gem_network:
+
 services:
   weaviate:
     image: semitechnologies/weaviate:1.23.7
@@ -12,7 +15,10 @@ services:
       AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
       PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
       DEFAULT_VECTORIZER_MODULE: 'none'
+      ENABLE_MODULES: ''
       CLUSTER_HOSTNAME: 'node1'
+    networks:
+      - gem_network
 
   api:
     build:
@@ -24,6 +30,10 @@ services:
       - weaviate
     environment:
       - WEAVIATE_URL=http://weaviate:8080
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
     volumes:
       - ./src:/app/src
       - /Users/sirajraval/Desktop:/app/data
+    mem_limit: 4g
+    networks:
+      - gem_network
