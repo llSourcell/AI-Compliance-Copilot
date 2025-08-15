@@ -34,6 +34,7 @@ services:
     volumes:
       - ./src:/app/src
       - /Users/sirajraval/Desktop:/app/data
+      - ./frontend:/app/frontend
     mem_limit: 4g
     networks:
       - gem_network
