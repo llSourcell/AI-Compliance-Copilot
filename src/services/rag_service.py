@@ -12,11 +12,15 @@ from weaviate.connect import ConnectionParams
 from tenacity import retry, stop_after_attempt, wait_fixed
 import weaviate.classes as wvc
 from src.services.pii_service import PIIRedactionService
+from src.services.ingestion_service import LOCAL_STORE
 import os
 
 class RAGService:
     def __init__(self, pii_service: PIIRedactionService | None = None):
-        self.weaviate_client = self._connect_with_retry()
+        try:
+            self.weaviate_client = self._connect_with_retry()
+        except Exception:
+            self.weaviate_client = None
         self.openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
         # Embeddings backend
         self.use_openai_embeddings = bool(settings.USE_OPENAI_EMBEDDINGS)
@@ -74,7 +78,25 @@ class RAGService:
         query_embedding = self._embed(query)
 
         # 2. Hybrid Search
-        collection = self.weaviate_client.collections.get(self.collection_name)
+        if self.weaviate_client is None:
+            # In-memory cosine search over LOCAL_STORE
+            import numpy as np
+            def cos(a: list[float], b: list[float]) -> float:
+                va = np.array(a, dtype=float)
+                vb = np.array(b, dtype=float)
+                return float(va @ vb / (np.linalg.norm(va) * np.linalg.norm(vb) + 1e-8))
+
+            candidates = [item for item in LOCAL_STORE if (not source) or os.path.basename(item.get("source", "")) == os.path.basename(source)]
+            scored = []
+            for item in candidates:
+                v = item.get("vector")
+                if not v:
+                    continue
+                scored.append({**item, "score": cos(query_embedding, v)})
+            scored.sort(key=lambda x: x["score"], reverse=True)
+            search_results = scored[:50]
+        else:
+            collection = self.weaviate_client.collections.get(self.collection_name)
         
         # Prepare DB-level filters if a specific source is targeted (try basename first, then full path)
         filter_basename = None
@@ -95,55 +117,55 @@ class RAGService:
                 return_metadata=wvc.query.MetadataQuery(score=True)
             )
 
-        # Try basename filter first, then fullpath, then no filter
-        response = run_hybrid(alpha=0.5, filters=filter_basename)
+            # Try basename filter first, then fullpath, then no filter
+            response = run_hybrid(alpha=0.5, filters=filter_basename)
 
-        search_results = []
-        if response.objects:
-            for o in response.objects:
-                result = o.properties
-                result['score'] = o.metadata.score
-                search_results.append(result)
-
-        # Fallback BM25-only with filter
-        if not search_results:
-            response = run_hybrid(alpha=0.0, filters=filter_basename)
+            search_results = []
             if response.objects:
                 for o in response.objects:
                     result = o.properties
                     result['score'] = o.metadata.score
                     search_results.append(result)
 
-        # Fallback hybrid with fullpath
-        if not search_results and filter_fullpath is not None:
-            response = run_hybrid(alpha=0.5, filters=filter_fullpath)
-            if response.objects:
-                for o in response.objects:
-                    result = o.properties
-                    result['score'] = o.metadata.score
-                    search_results.append(result)
+            # Fallback BM25-only with filter
+            if not search_results:
+                response = run_hybrid(alpha=0.0, filters=filter_basename)
+                if response.objects:
+                    for o in response.objects:
+                        result = o.properties
+                        result['score'] = o.metadata.score
+                        search_results.append(result)
 
-        # Fallback hybrid without filter
-        if not search_results and (filter_basename is not None or filter_fullpath is not None):
-            response = run_hybrid(alpha=0.5, filters=None)
-            if response.objects:
-                for o in response.objects:
-                    result = o.properties
-                    result['score'] = o.metadata.score
-                    search_results.append(result)
+            # Fallback hybrid with fullpath
+            if not search_results and filter_fullpath is not None:
+                response = run_hybrid(alpha=0.5, filters=filter_fullpath)
+                if response.objects:
+                    for o in response.objects:
+                        result = o.properties
+                        result['score'] = o.metadata.score
+                        search_results.append(result)
 
-        # Fallback fetch by source
-        if not search_results and (filter_basename is not None or filter_fullpath is not None):
-            try:
-                fetched = collection.query.fetch_objects(limit=10, filters=filter_basename or filter_fullpath)
-                if (not fetched.objects) and (filter_fullpath is not None):
-                    fetched = collection.query.fetch_objects(limit=10, filters=filter_fullpath)
-                if fetched.objects:
-                    for o in fetched.objects:
-                        search_results.append({**o.properties})
-                    search_results.sort(key=lambda x: int(x.get("page_number", 9999)))
-            except Exception:
-                pass
+            # Fallback hybrid without filter
+            if not search_results and (filter_basename is not None or filter_fullpath is not None):
+                response = run_hybrid(alpha=0.5, filters=None)
+                if response.objects:
+                    for o in response.objects:
+                        result = o.properties
+                        result['score'] = o.metadata.score
+                        search_results.append(result)
+
+            # Fallback fetch by source
+            if not search_results and (filter_basename is not None or filter_fullpath is not None):
+                try:
+                    fetched = collection.query.fetch_objects(limit=10, filters=filter_basename or filter_fullpath)
+                    if (not fetched.objects) and (filter_fullpath is not None):
+                        fetched = collection.query.fetch_objects(limit=10, filters=filter_fullpath)
+                    if fetched.objects:
+                        for o in fetched.objects:
+                            search_results.append({**o.properties})
+                        search_results.sort(key=lambda x: int(x.get("page_number", 9999)))
+                except Exception:
+                    pass
 
         if not search_results and source:
             try:

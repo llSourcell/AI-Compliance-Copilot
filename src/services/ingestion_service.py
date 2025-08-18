@@ -15,10 +15,17 @@ import os
 from urllib.parse import urlparse
 from openai import OpenAI
 
+# Process-wide lightweight fallback store when Weaviate is unavailable (Heroku)
+LOCAL_STORE: list[dict] = []
+
 
 class IngestionService:
     def __init__(self):
-        self.weaviate_client = self._connect_with_retry()
+        # Try to connect to Weaviate; if unavailable (e.g., Heroku without external URL), fallback to in-memory store
+        try:
+            self.weaviate_client = self._connect_with_retry()
+        except Exception:
+            self.weaviate_client = None
         self.use_openai_embeddings = bool(settings.USE_OPENAI_EMBEDDINGS)
         if self.use_openai_embeddings:
             self.openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
@@ -30,7 +37,8 @@ class IngestionService:
             self.embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL, device="cpu")
         self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
         self.collection_name = "ComplianceDocument"
-        self._create_schema()
+        if self.weaviate_client is not None:
+            self._create_schema()
 
     @retry(stop=stop_after_attempt(10), wait=wait_fixed(2))
     def _connect_with_retry(self):
@@ -120,38 +128,43 @@ class IngestionService:
         texts = [item["content"] for item in chunks_with_metadata]
         embeddings = self._embed_many(texts)
 
-        collection = self.weaviate_client.collections.get(self.collection_name)
+        if self.weaviate_client is None:
+            # In-memory fallback for Heroku
+            for i, chunk_data in enumerate(chunks_with_metadata):
+                LOCAL_STORE.append({**chunk_data, "vector": embeddings[i]})
+        else:
+            collection = self.weaviate_client.collections.get(self.collection_name)
 
-        def _send_batch() -> None:
-            with collection.batch.dynamic() as batch:
-                for i, chunk_data in enumerate(chunks_with_metadata):
-                    batch.add_object(properties=chunk_data, vector=embeddings[i])
+            def _send_batch() -> None:
+                with collection.batch.dynamic() as batch:
+                    for i, chunk_data in enumerate(chunks_with_metadata):
+                        batch.add_object(properties=chunk_data, vector=embeddings[i])
 
-        # Primary attempt: batch insert
-        try:
-            _send_batch()
-        except WeaviateBatchError as e:
-            if "read-only" in str(e).lower():
-                import time
-                time.sleep(2)
+            # Primary attempt: batch insert
+            try:
                 _send_batch()
-            else:
-                return f"Ingestion failed with error: {e}"
+            except WeaviateBatchError as e:
+                if "read-only" in str(e).lower():
+                    import time
+                    time.sleep(2)
+                    _send_batch()
+                else:
+                    return f"Ingestion failed with error: {e}"
 
-        # Fallback: re-insert individually
-        try:
-            import time
-            with collection.batch.fixed_size(1) as single:
-                for i, chunk_data in enumerate(chunks_with_metadata):
-                    for _ in range(3):
-                        try:
-                            single.add_object(properties=chunk_data, vector=embeddings[i])
-                            break
-                        except Exception:
-                            time.sleep(0.5)
-                            continue
-        except Exception:
-            pass
+            # Fallback: re-insert individually
+            try:
+                import time
+                with collection.batch.fixed_size(1) as single:
+                    for i, chunk_data in enumerate(chunks_with_metadata):
+                        for _ in range(3):
+                            try:
+                                single.add_object(properties=chunk_data, vector=embeddings[i])
+                                break
+                            except Exception:
+                                time.sleep(0.5)
+                                continue
+            except Exception:
+                pass
 
         self._last_chunks_count = len(chunks_with_metadata)  # type: ignore[attr-defined]
         self._last_ocr_pages = ocr_pages  # type: ignore[attr-defined]
