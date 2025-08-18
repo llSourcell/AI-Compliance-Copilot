@@ -40,7 +40,11 @@ async def ingest(
     else:
         file_path = request.file_path  # type: ignore[assignment]
 
-    result = service.ingest_document(file_path)
+    try:
+        result = service.ingest_document(file_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ingestion error: {exc}")
+
     chunks = getattr(service, "_last_chunks_count", 0)
     ocr_pages = getattr(service, "_last_ocr_pages", 0)
     msg = "Success" if chunks > 0 else "No text extracted"
