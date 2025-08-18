@@ -8,10 +8,13 @@ class IngestRequest(BaseModel):
 class IngestResponse(BaseModel):
     message: str
     document_id: str
+    chunks_count: int
+    ocr_pages_count: int
 
 
 class QueryRequest(BaseModel):
     query: str
+    source: str | None = None
 
 
 class Citation(BaseModel):

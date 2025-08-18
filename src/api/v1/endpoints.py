@@ -13,6 +13,11 @@ from src.services.ingestion_service import IngestionService
 router = APIRouter()
 
 
+def get_rag_service() -> RAGService:
+    # Isolate DI to avoid FastAPI trying to parse class __init__ annotations
+    return RAGService()
+
+
 @router.post("/ingest", response_model=IngestResponse)
 async def ingest(
     request: IngestRequest | None = None,
@@ -36,11 +41,26 @@ async def ingest(
         file_path = request.file_path  # type: ignore[assignment]
 
     result = service.ingest_document(file_path)
-    return IngestResponse(message="Success", document_id=result)
+    chunks = getattr(service, "_last_chunks_count", 0)
+    ocr_pages = getattr(service, "_last_ocr_pages", 0)
+    msg = "Success" if chunks > 0 else "No text extracted"
+    # Return basename as the document_id so subsequent queries filter correctly
+    doc_id = os.path.basename(result)
+    # Back-compat: return both new and old keys so the frontend never sees undefined
+    return JSONResponse(
+        content={
+            "message": msg,
+            "document_id": doc_id,
+            "chunks_count": chunks,
+            "ocr_pages_count": ocr_pages,
+            "chunks": chunks,
+            "ocr_pages": ocr_pages,
+        }
+    )
 
 
 @router.post("/query", response_model=QueryResponse)
-def query(request: QueryRequest, service: RAGService = Depends()) -> QueryResponse:
+def query(request: QueryRequest, service: RAGService = Depends(get_rag_service)) -> QueryResponse:
     """Query the compliance documents."""
-    answer, citations = service.query(request.query)
+    answer, citations = service.query(request.query, source=request.source)
     return QueryResponse(answer=answer, citations=citations)

@@ -12,6 +12,7 @@ export default function HomePage() {
   const [citations, setCitations] = useState<Array<{source:string; page_number:number; text:string; score:number}>>([])
   const [loadingQuery, setLoadingQuery] = useState(false)
   const [status, setStatus] = useState('')
+  const [lastSource, setLastSource] = useState<string | null>(null)
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFile(e.target.files?.[0] ?? null)
@@ -30,7 +31,11 @@ export default function HomePage() {
       })
       if (!res.ok) throw new Error(await res.text())
       const data = await res.json()
-      setStatus(`Ingested: ${data.document_id}`)
+      const chunksCount = typeof data.chunks_count === 'number' ? data.chunks_count : data.chunks
+      const ocrPagesCount = typeof data.ocr_pages_count === 'number' ? data.ocr_pages_count : data.ocr_pages
+      setStatus(`Ingested: ${data.document_id} (chunks: ${chunksCount}, ocr pages: ${ocrPagesCount})`)
+      // Only set as active source if we actually indexed something
+      setLastSource(chunksCount > 0 ? (data.document_id || null) : null)
     } catch (e: any) {
       setStatus(`Error: ${e.message || 'upload failed'}`)
     } finally {
@@ -47,7 +52,7 @@ export default function HomePage() {
       const res = await fetch(`${API_BASE}/api/v1/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query })
+        body: JSON.stringify({ query, source: lastSource })
       })
       if (!res.ok) throw new Error(await res.text())
       const data = await res.json()

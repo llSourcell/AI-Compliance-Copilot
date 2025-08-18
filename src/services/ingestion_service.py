@@ -1,5 +1,7 @@
 import weaviate
 import fitz  # PyMuPDF
+import pytesseract
+from PIL import Image
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 from src.core.config import settings
@@ -9,13 +11,14 @@ from weaviate.connect import ConnectionParams
 import weaviate.classes as wvc
 from weaviate.exceptions import WeaviateBatchError
 from tenacity import retry, stop_after_attempt, wait_fixed
+import os
 
 
 class IngestionService:
     def __init__(self):
         self.weaviate_client = self._connect_with_retry()
         self.embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL, device="cpu")
-        self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=1024, chunk_overlap=200)
+        self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
         self.collection_name = "ComplianceDocument"
         self._create_schema()
 
@@ -47,18 +50,56 @@ class IngestionService:
     def ingest_document(self, file_path: str) -> str:
         try:
             doc = fitz.open(file_path)
-            texts = [page.get_text() for page in doc]
+            page_texts: List[str] = []
+            ocr_pages = 0
+            for page in doc:
+                text = page.get_text("text") or ""
+                if len(text.strip()) < 10:
+                    # OCR fallback for image-only pages
+                    pix = page.get_pixmap(alpha=False)
+                    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                    ocr_text = pytesseract.image_to_string(img, config='--oem 1 --psm 6') or ""
+                    text = ocr_text
+                    if ocr_text.strip():
+                        ocr_pages += 1
+                page_texts.append(text)
+
+            # Extract PDF metadata (if present)
+            metadata = doc.metadata or {}
+            author = metadata.get("author") or metadata.get("Author")
+            title = metadata.get("title") or metadata.get("Title")
+            subject = metadata.get("subject") or metadata.get("Subject")
+            keywords = metadata.get("keywords") or metadata.get("Keywords")
             doc.close()
         except Exception as e:
             return f"Error reading file {file_path}: {e}"
 
-        chunks_with_metadata = []
-        for i, text in enumerate(texts):
+        chunks_with_metadata: List[dict] = []
+        for i, text in enumerate(page_texts):
             chunks = self.text_splitter.split_text(text)
             for chunk in chunks:
                 chunks_with_metadata.append(
-                    {"content": chunk, "source": file_path, "page_number": i + 1}
+                    {"content": chunk, "source": os.path.basename(file_path), "page_number": i + 1}
                 )
+
+        # Add a small synthetic chunk with document-level metadata for better Q&A (e.g., author/title)
+        metadata_lines: List[str] = []
+        if title:
+            metadata_lines.append(f"Title: {title}")
+        if author:
+            metadata_lines.append(f"Author: {author}")
+        if subject:
+            metadata_lines.append(f"Subject: {subject}")
+        if keywords:
+            metadata_lines.append(f"Keywords: {keywords}")
+        if metadata_lines:
+            chunks_with_metadata.append(
+                {
+                    "content": "\n".join(metadata_lines),
+                    "source": os.path.basename(file_path),
+                    "page_number": 0,
+                }
+            )
 
         if not chunks_with_metadata:
             return f"No text could be extracted from {file_path}."
@@ -70,14 +111,40 @@ class IngestionService:
         )
 
         collection = self.weaviate_client.collections.get(self.collection_name)
-        try:
+
+        def _send_batch() -> None:
             with collection.batch.dynamic() as batch:
                 for i, chunk_data in enumerate(chunks_with_metadata):
-                    batch.add_object(
-                        properties=chunk_data,
-                        vector=embeddings[i],
-                    )
-        except WeaviateBatchError as e:
-            return f"Ingestion failed with error: {e}"
+                    batch.add_object(properties=chunk_data, vector=embeddings[i])
 
-        return f"Successfully ingested {len(chunks_with_metadata)} chunks from {file_path}"
+        # Primary attempt: batch insert
+        try:
+            _send_batch()
+        except WeaviateBatchError as e:
+            if "read-only" in str(e).lower():
+                import time
+                time.sleep(2)
+                _send_batch()
+            else:
+                return f"Ingestion failed with error: {e}"
+
+        # Fallback: re-insert individually with small fixed-size batches (handles silent partial failures)
+        try:
+            import time
+            with collection.batch.fixed_size(1) as single:
+                for i, chunk_data in enumerate(chunks_with_metadata):
+                    for _ in range(3):
+                        try:
+                            single.add_object(properties=chunk_data, vector=embeddings[i])
+                            break
+                        except Exception:
+                            time.sleep(0.5)
+                            continue
+        except Exception:
+            # Ignore; best-effort fallback
+            pass
+
+        # Store stats for response enrichment via endpoint
+        self._last_chunks_count = len(chunks_with_metadata)  # type: ignore[attr-defined]
+        self._last_ocr_pages = ocr_pages  # type: ignore[attr-defined]
+        return file_path
