@@ -5,7 +5,7 @@ Enterprise-grade RAG application for compliance.
 ## Tech Stack
 
 - **Backend:** Python 3.11+, FastAPI
-- **Frontend:** React, Chakra UI
+- **Frontend:** Next.js 14 (React), Tailwind CSS
 - **Dependency Management:** Poetry
 - **Vector DB:** Weaviate
 - **QA:** `pytest`, `mypy`, `ruff`, `pre-commit`
@@ -76,7 +76,7 @@ npm install
 npm run dev
 ```
 
-The frontend application will be available at `http://localhost:3000`.
+The frontend application will be available at `http://localhost:3000` (or `3001`).
 
 Set `NEXT_PUBLIC_API_BASE` in `frontend/.env.local` to point to your API if different from the default `http://localhost:8000`.
 
@@ -122,7 +122,47 @@ poetry run pytest --cov=src
 │   │   └── api.py
 │   └── services
 │       ├── ingestion_service.py
+│       ├── pii_service.py
 │       └── rag_service.py
 └── tests
     └── test_main.py
+```
+
+## Privacy, Tracing, and Observability
+
+- Strict Privacy (default ON):
+  - Request body supports `strict_privacy: true | false` (default: true)
+  - With strict privacy ON, PERSON/EMAIL/IP are redacted in: retrieved context, final answer, and citations.
+  - With strict privacy OFF, identity questions (e.g., "who is the author?") may reveal names.
+
+- Redacted Citations:
+  - Citation `text` is redacted under strict privacy to prevent PII leakage in the UI.
+
+- Trace and Groundedness:
+  - Each `/query` response returns `trace_id` (UUID) to correlate logs/observability.
+  - `groundedness` is a simple softmax-normalized proxy score based on reranker scores of the cited contexts (0.0–1.0).
+
+## API Reference (Selected)
+
+- POST `/api/v1/ingest`: multipart form upload (`file`) → returns `{ message, document_id, chunks_count, ocr_pages_count }`.
+
+- POST `/api/v1/query`:
+  - Request: `{ "query": str, "source": str|null, "strict_privacy": bool }`
+  - Response: `{ "answer": str, "citations": Citation[], "trace_id": str, "groundedness": float }`
+  - `Citation`: `{ source: str, page_number: int, text: str, score: float }`
+
+## Local cURL Examples
+
+```bash
+# Ingest a PDF
+curl -sS -X POST http://localhost:8000/api/v1/ingest -H 'Expect:' \
+  -F 'file=@/absolute/path/to/your.pdf;type=application/pdf'
+
+# Query with strict privacy ON (redacts names/emails/IPs everywhere)
+curl -sS -X POST http://localhost:8000/api/v1/query -H 'Content-Type: application/json' \
+  -d '{"query":"who is the author?","source":"your.pdf","strict_privacy":true}'
+
+# Query with strict privacy OFF (allows revealing names for identity questions)
+curl -sS -X POST http://localhost:8000/api/v1/query -H 'Content-Type: application/json' \
+  -d '{"query":"who is the author?","source":"your.pdf","strict_privacy":false}'
 ```

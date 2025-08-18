@@ -62,5 +62,7 @@ async def ingest(
 @router.post("/query", response_model=QueryResponse)
 def query(request: QueryRequest, service: RAGService = Depends(get_rag_service)) -> QueryResponse:
     """Query the compliance documents."""
-    answer, citations = service.query(request.query, source=request.source)
-    return QueryResponse(answer=answer, citations=citations)
+    answer, citations, trace_id, groundedness = service.query(
+        request.query, source=request.source, strict_privacy=request.strict_privacy
+    )
+    return QueryResponse(answer=answer, citations=citations, trace_id=trace_id, groundedness=groundedness)

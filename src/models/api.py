@@ -15,6 +15,7 @@ class IngestResponse(BaseModel):
 class QueryRequest(BaseModel):
     query: str
     source: str | None = None
+    strict_privacy: bool = True
 
 
 class Citation(BaseModel):
@@ -27,3 +28,5 @@ class Citation(BaseModel):
 class QueryResponse(BaseModel):
     answer: str
     citations: list[Citation]
+    trace_id: str
+    groundedness: float

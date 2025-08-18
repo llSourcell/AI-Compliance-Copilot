@@ -31,7 +31,7 @@ class RAGService:
         client.connect()
         return client
 
-    def query(self, query: str, source: str | None = None) -> tuple[str, List[Citation]]:
+    def query(self, query: str, source: str | None = None, strict_privacy: bool = True) -> tuple[str, List[Citation], str, float]:
         # 1. Get query embedding
         query_embedding = self.embedding_model.encode(query, normalize_embeddings=True).tolist()
 
@@ -146,7 +146,7 @@ class RAGService:
 
         # 3. Reranking
         if not search_results:
-            return "No results found.", []
+            return "No results found.", [], self._new_trace_id(), 0.0
             
         cross_inp = [[query, result["content"]] for result in search_results]
         cross_scores = self.reranker.predict(cross_inp).tolist()
@@ -176,10 +176,10 @@ class RAGService:
         top_k = 3
         selected = reranked_results[:top_k]
         redacted_context_parts: List[str] = []
-        # If the user is asking for authorship/people, do not redact PERSON entities
+        # If strict privacy, always redact PERSON. Otherwise allow identity questions to show names.
         lower_q = query.lower()
         skip_entities: list[str] = []
-        if any(word in lower_q for word in ["author", "who is", "who's", "person", "name"]):
+        if not strict_privacy and any(word in lower_q for word in ["author", "who is", "who's", "person", "name"]):
             skip_entities = ["PERSON"]
         for result in selected:
             content = result["content"]
@@ -214,14 +214,33 @@ class RAGService:
         # 6. Redact final answer for any residual PII and log
         answer = self.pii_service.redact_text(raw_answer, skip_entities=skip_entities)
 
+        # Redact citation text as well for strict privacy
         citations = [
             Citation(
                 source=result["source"],
                 page_number=result["page_number"],
-                text=result["content"],
+                text=self.pii_service.redact_text(result["content"], skip_entities=skip_entities) if strict_privacy else result["content"],
                 score=result["rerank_score"],
             )
             for result in reranked_results[:top_k]
         ]
 
-        return answer, citations
+        # 7. Compute a simple groundedness proxy (normalized avg rerank score)
+        import math
+        scores = [max(-20.0, min(20.0, float(r.get("rerank_score", 0.0)))) for r in reranked_results[:top_k]]
+        if scores:
+            # softmax over top_k rerank scores
+            exps = [math.exp(s - max(scores)) for s in scores]
+            sm = [e / (sum(exps) or 1.0) for e in exps]
+            groundedness = float(sum(sm) / len(sm))
+        else:
+            groundedness = 0.0
+
+        # 8. Trace id (simple uuid)
+        trace_id = self._new_trace_id()
+
+        return answer, citations, trace_id, groundedness
+
+    def _new_trace_id(self) -> str:
+        from uuid import uuid4
+        return str(uuid4())
