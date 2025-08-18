@@ -7,6 +7,7 @@ from presidio_analyzer import AnalyzerEngine, RecognizerResult
 from presidio_anonymizer import AnonymizerEngine
 from presidio_anonymizer.entities import OperatorConfig
 from presidio_analyzer.nlp_engine import NlpEngineProvider
+from src.core.config import settings
 
 
 class PIIRedactionService:
@@ -30,11 +31,14 @@ class PIIRedactionService:
             "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
         }
 
-        provider = NlpEngineProvider(nlp_configuration=nlp_configuration)
-        nlp_engine = provider.create_engine()
-
-        self.analyzer = AnalyzerEngine(nlp_engine=nlp_engine, supported_languages=["en"])
-        self.anonymizer = AnonymizerEngine()
+        if settings.ENABLE_PRESIDIO:
+            provider = NlpEngineProvider(nlp_configuration=nlp_configuration)
+            nlp_engine = provider.create_engine()
+            self.analyzer = AnalyzerEngine(nlp_engine=nlp_engine, supported_languages=["en"])
+            self.anonymizer = AnonymizerEngine()
+        else:
+            self.analyzer = None
+            self.anonymizer = None
 
         # Configure replacements per entity type
         # Operator configurations for current Presidio versions
@@ -57,17 +61,29 @@ class PIIRedactionService:
             entities = ["PERSON", "EMAIL_ADDRESS", "IP_ADDRESS"]
             if skip_entities:
                 entities = [e for e in entities if e not in set(skip_entities)]
-            results: List[RecognizerResult] = self.analyzer.analyze(
-                text=text,
-                language="en",
-                entities=entities,
-            )
+            if self.analyzer and self.anonymizer:
+                results: List[RecognizerResult] = self.analyzer.analyze(
+                    text=text,
+                    language="en",
+                    entities=entities,
+                )
 
-            redacted = self.anonymizer.anonymize(
-                text=text,
-                analyzer_results=results,
-                operators=self._operators_config,
-            ).text
+                redacted = self.anonymizer.anonymize(
+                    text=text,
+                    analyzer_results=results,
+                    operators=self._operators_config,
+                ).text
+            else:
+                import re
+                r = text
+                if "EMAIL_ADDRESS" in entities:
+                    r = re.sub(r"[\w.%-]+@[\w.-]+\.[A-Za-z]{2,}", "<EMAIL>", r)
+                if "IP_ADDRESS" in entities:
+                    r = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "<IP>", r)
+                if "PERSON" in entities:
+                    r = re.sub(r"\b([A-Z][a-z]+\s+[A-Z][a-z]+)\b", "<PERSON>", r)
+                results = []
+                redacted = r
         except Exception as exc:
             # Never break the pipeline due to redaction; log and return original
             self.logger.warning("PII redaction error: %s", exc)

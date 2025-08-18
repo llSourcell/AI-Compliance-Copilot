@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str
     USE_OPENAI_EMBEDDINGS: bool = True
     USE_OPENAI_RERANKER: bool = True
+    ENABLE_PRESIDIO: bool = False
 
     class Config:
         case_sensitive = True
