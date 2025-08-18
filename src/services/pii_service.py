@@ -12,7 +12,7 @@ except Exception:  # pragma: no cover
     AnalyzerEngine = None  # type: ignore
     RecognizerResult = object  # type: ignore
     AnonymizerEngine = None  # type: ignore
-    OperatorConfig = object  # type: ignore
+    OperatorConfig = None  # type: ignore
     NlpEngineProvider = None  # type: ignore
 from src.core.config import settings
 
@@ -38,23 +38,23 @@ class PIIRedactionService:
             "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
         }
 
-        if settings.ENABLE_PRESIDIO and AnalyzerEngine is not None and NlpEngineProvider is not None:
+        if settings.ENABLE_PRESIDIO and AnalyzerEngine is not None and NlpEngineProvider is not None and AnonymizerEngine is not None and OperatorConfig is not None:
             provider = NlpEngineProvider(nlp_configuration=nlp_configuration)
             nlp_engine = provider.create_engine()
             self.analyzer = AnalyzerEngine(nlp_engine=nlp_engine, supported_languages=["en"])
             self.anonymizer = AnonymizerEngine()
+            # Configure replacements per entity type (only when Presidio is active)
+            self._operators_config: Dict[str, OperatorConfig] = {
+                "PERSON": OperatorConfig(operator_name="replace", params={"new_value": "<PERSON>"}),
+                "EMAIL_ADDRESS": OperatorConfig(operator_name="replace", params={"new_value": "<EMAIL>"}),
+                "IP_ADDRESS": OperatorConfig(operator_name="replace", params={"new_value": "<IP>"}),
+                "DEFAULT": OperatorConfig(operator_name="replace", params={"new_value": "<REDACTED>"}),
+            }
         else:
             self.analyzer = None
             self.anonymizer = None
-
-        # Configure replacements per entity type
-        # Operator configurations for current Presidio versions
-        self._operators_config: Dict[str, OperatorConfig] = {
-            "PERSON": OperatorConfig(operator_name="replace", params={"new_value": "<PERSON>"}),
-            "EMAIL_ADDRESS": OperatorConfig(operator_name="replace", params={"new_value": "<EMAIL>"}),
-            "IP_ADDRESS": OperatorConfig(operator_name="replace", params={"new_value": "<IP>"}),
-            "DEFAULT": OperatorConfig(operator_name="replace", params={"new_value": "<REDACTED>"}),
-        }
+            # No Presidio: operators config not used
+            self._operators_config = {}
 
     def redact_text(self, text: str, skip_entities: list[str] | None = None) -> str:
         """Redact PII from text and log a concise audit trail.
