@@ -30,6 +30,7 @@ ragas = "^0.1.9"
 datasets = "^2.20.0"
 pandas = "^2.2.2"
 requests = "^2.32.3"
+numpy = "^1.26.4"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
