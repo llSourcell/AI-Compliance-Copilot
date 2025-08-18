@@ -1,6 +1,7 @@
 # Veritas - AI Compliance Copilot
 
-An enterprise, “glass‑box” RAG system engineered for truth, privacy, and production. It ingests PDFs, retrieves with hybrid search + reranking, generates answers with strict citations, and enforces configurable PII redaction — all with observability hooks to prove what the model saw and why.
+An enterprise, “glass‑box” RAG system engineered for truth, privacy, and production. It ingests PDFs, retrieves with hybrid search + reranking, generates answers with strict citations, and enforces configurable PII redaction — all with observability hooks to prove what the model saw and why. [Live Demo](https://compliance-copilot-api-de2f0b07d15c.herokuapp.com/)
+
 
 ![image](https://i.imgur.com/BUE3b7B.png)
 
