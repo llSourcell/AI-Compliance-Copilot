@@ -47,17 +47,8 @@ class IngestionService:
             client = weaviate.WeaviateClient(ConnectionParams.from_url(weaviate_url))
             client.connect()
             return client
-        # docker-compose fallback
-        client = weaviate.WeaviateClient(ConnectionParams.from_params(
-            http_host="weaviate",
-            http_port=8080,
-            http_secure=False,
-            grpc_host="weaviate",
-            grpc_port=50051,
-            grpc_secure=False,
-        ))
-        client.connect()
-        return client
+        # On Heroku, do not attempt docker host; signal caller to fallback immediately
+        raise RuntimeError("WEAVIATE_URL not set; using in-memory store")
 
     def _embed_many(self, texts: list[str]) -> list[list[float]]:
         if self.use_openai_embeddings:

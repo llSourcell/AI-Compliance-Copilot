@@ -59,6 +59,7 @@ async def ingest(
             "ocr_pages_count": ocr_pages,
             "chunks": chunks,
             "ocr_pages": ocr_pages,
+            "store": "memory" if getattr(service, "weaviate_client", None) is None else "weaviate",
         }
     )
 
