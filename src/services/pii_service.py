@@ -3,10 +3,17 @@ from __future__ import annotations
 from typing import Dict, List
 import logging
 
-from presidio_analyzer import AnalyzerEngine, RecognizerResult
-from presidio_anonymizer import AnonymizerEngine
-from presidio_anonymizer.entities import OperatorConfig
-from presidio_analyzer.nlp_engine import NlpEngineProvider
+try:
+    from presidio_analyzer import AnalyzerEngine, RecognizerResult  # optional
+    from presidio_anonymizer import AnonymizerEngine
+    from presidio_anonymizer.entities import OperatorConfig
+    from presidio_analyzer.nlp_engine import NlpEngineProvider
+except Exception:  # pragma: no cover
+    AnalyzerEngine = None  # type: ignore
+    RecognizerResult = object  # type: ignore
+    AnonymizerEngine = None  # type: ignore
+    OperatorConfig = object  # type: ignore
+    NlpEngineProvider = None  # type: ignore
 from src.core.config import settings
 
 
@@ -31,7 +38,7 @@ class PIIRedactionService:
             "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
         }
 
-        if settings.ENABLE_PRESIDIO:
+        if settings.ENABLE_PRESIDIO and AnalyzerEngine is not None and NlpEngineProvider is not None:
             provider = NlpEngineProvider(nlp_configuration=nlp_configuration)
             nlp_engine = provider.create_engine()
             self.analyzer = AnalyzerEngine(nlp_engine=nlp_engine, supported_languages=["en"])
@@ -92,7 +99,8 @@ class PIIRedactionService:
         if results:
             counts: Dict[str, int] = {}
             for r in results:
-                counts[r.entity_type] = counts.get(r.entity_type, 0) + 1
+                et = getattr(r, "entity_type", "UNKNOWN")
+                counts[et] = counts.get(et, 0) + 1
             summary = ", ".join(f"{k}:{v}" for k, v in sorted(counts.items()))
             self.logger.info(
                 "PII redaction applied | entities=%s | original_len=%d | redacted_len=%d",

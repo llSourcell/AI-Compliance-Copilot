@@ -1,6 +1,9 @@
 import weaviate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from sentence_transformers import SentenceTransformer
+try:
+    from sentence_transformers import SentenceTransformer  # optional for Heroku
+except Exception:  # pragma: no cover
+    SentenceTransformer = None  # type: ignore
 from src.core.config import settings
 from typing import List
 from uuid import uuid4
@@ -20,6 +23,10 @@ class IngestionService:
         if self.use_openai_embeddings:
             self.openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
         else:
+            if SentenceTransformer is None:
+                raise RuntimeError(
+                    "SentenceTransformer is not installed. Set USE_OPENAI_EMBEDDINGS=true on Heroku."
+                )
             self.embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL, device="cpu")
         self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
         self.collection_name = "ComplianceDocument"
