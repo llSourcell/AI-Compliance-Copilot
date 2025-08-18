@@ -2,7 +2,7 @@
 
 An enterprise, “glass‑box” RAG system engineered for truth, privacy, and production. It ingests PDFs, retrieves with hybrid search + reranking, generates answers with strict citations, and enforces configurable PII redaction — all with observability hooks to prove what the model saw and why.
 
-[image](https://i.imgur.com/BUE3b7B.png)[/image]
+![image](https://i.imgur.com/BUE3b7B.png)
 
 ### Why this project matters
 - Transparency by design: verifiable, deduplicated citations and a per‑answer groundedness signal.
