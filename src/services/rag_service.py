@@ -33,23 +33,14 @@ class RAGService:
         self.collection_name = "ComplianceDocument"
         self.pii_service = pii_service or PIIRedactionService()
 
-    @retry(stop=stop_after_attempt(10), wait=wait_fixed(2))
     def _connect_with_retry(self):
         weaviate_url = os.environ.get("WEAVIATE_URL", "").strip()
         if weaviate_url:
             client = weaviate.WeaviateClient(ConnectionParams.from_url(weaviate_url))
             client.connect()
             return client
-        client = weaviate.WeaviateClient(ConnectionParams.from_params(
-            http_host="weaviate",
-            http_port=8080,
-            http_secure=False,
-            grpc_host="weaviate",
-            grpc_port=50051,
-            grpc_secure=False,
-        ))
-        client.connect()
-        return client
+        # Heroku: no docker host. Use in-memory store instead.
+        raise RuntimeError("WEAVIATE_URL not set; using in-memory store")
 
     def _embed(self, text: str) -> list[float]:
         if self.use_openai_embeddings:
@@ -59,14 +50,14 @@ class RAGService:
 
     def _rerank(self, query: str, docs: list[str]) -> list[float]:
         if self.use_openai_reranker:
-            # Use direct relevance scoring via embeddings cosine similarity as a light proxy
+            # Batch embed all docs once to avoid many requests
             qv = self._embed(query)
             import numpy as np
             q = np.array(qv, dtype=float)
+            emb = self.openai_client.embeddings.create(model="text-embedding-3-large", input=docs)
             scores = []
-            for d in docs:
-                dv = self.openai_client.embeddings.create(model="text-embedding-3-large", input=d).data[0].embedding
-                v = np.array(dv, dtype=float)
+            for d in emb.data:
+                v = np.array(d.embedding, dtype=float)
                 sim = float(q @ v / (np.linalg.norm(q) * np.linalg.norm(v) + 1e-8))
                 scores.append(sim)
             return scores
@@ -97,7 +88,7 @@ class RAGService:
             search_results = scored[:50]
         else:
             collection = self.weaviate_client.collections.get(self.collection_name)
-        
+
         # Prepare DB-level filters if a specific source is targeted (try basename first, then full path)
         filter_basename = None
         filter_fullpath = None
@@ -107,15 +98,16 @@ class RAGService:
             filter_basename = wvc.query.Filter.by_property("source").equal(src_name)
             filter_fullpath = wvc.query.Filter.by_property("source").equal(source)
 
-        def run_hybrid(alpha: float, filters: object | None):
-            return collection.query.hybrid(
-                query=query,
-                vector=query_embedding,
-                alpha=alpha,
-                limit=50,
-                filters=filters,
-                return_metadata=wvc.query.MetadataQuery(score=True)
-            )
+        if self.weaviate_client is not None:
+            def run_hybrid(alpha: float, filters: object | None):
+                return collection.query.hybrid(
+                    query=query,
+                    vector=query_embedding,
+                    alpha=alpha,
+                    limit=30,
+                    filters=filters,
+                    return_metadata=wvc.query.MetadataQuery(score=True)
+                )
 
             # Try basename filter first, then fullpath, then no filter
             response = run_hybrid(alpha=0.5, filters=filter_basename)
