@@ -13,9 +13,15 @@ import os
 class RAGService:
     def __init__(self, pii_service: PIIRedactionService | None = None):
         self.weaviate_client = self._connect_with_retry()
-        self.embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL, device="cpu")
-        self.reranker = CrossEncoder(settings.RERANKER_MODEL)
         self.openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        # Embeddings backend
+        self.use_openai_embeddings = bool(settings.USE_OPENAI_EMBEDDINGS)
+        if not self.use_openai_embeddings:
+            self.embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL, device="cpu")
+        # Reranker backend
+        self.use_openai_reranker = bool(settings.USE_OPENAI_RERANKER)
+        if not self.use_openai_reranker:
+            self.reranker = CrossEncoder(settings.RERANKER_MODEL)
         self.collection_name = "ComplianceDocument"
         self.pii_service = pii_service or PIIRedactionService()
 
@@ -37,9 +43,31 @@ class RAGService:
         client.connect()
         return client
 
+    def _embed(self, text: str) -> list[float]:
+        if self.use_openai_embeddings:
+            v = self.openai_client.embeddings.create(model="text-embedding-3-large", input=text).data[0].embedding
+            return v
+        return self.embedding_model.encode(text, normalize_embeddings=True).tolist()
+
+    def _rerank(self, query: str, docs: list[str]) -> list[float]:
+        if self.use_openai_reranker:
+            # Use direct relevance scoring via embeddings cosine similarity as a light proxy
+            qv = self._embed(query)
+            import numpy as np
+            q = np.array(qv, dtype=float)
+            scores = []
+            for d in docs:
+                dv = self.openai_client.embeddings.create(model="text-embedding-3-large", input=d).data[0].embedding
+                v = np.array(dv, dtype=float)
+                sim = float(q @ v / (np.linalg.norm(q) * np.linalg.norm(v) + 1e-8))
+                scores.append(sim)
+            return scores
+        # Fallback to CrossEncoder
+        return self.reranker.predict([[query, d] for d in docs]).tolist()
+
     def query(self, query: str, source: str | None = None, strict_privacy: bool = True) -> tuple[str, List[Citation], str, float]:
         # 1. Get query embedding
-        query_embedding = self.embedding_model.encode(query, normalize_embeddings=True).tolist()
+        query_embedding = self._embed(query)
 
         # 2. Hybrid Search
         collection = self.weaviate_client.collections.get(self.collection_name)
@@ -100,24 +128,19 @@ class RAGService:
                     result['score'] = o.metadata.score
                     search_results.append(result)
 
-        # Fallback fetch by source (page 1 first) when nothing retrieved
+        # Fallback fetch by source
         if not search_results and (filter_basename is not None or filter_fullpath is not None):
             try:
-                # Try basename fetch, then fullpath fetch
                 fetched = collection.query.fetch_objects(limit=10, filters=filter_basename or filter_fullpath)
                 if (not fetched.objects) and (filter_fullpath is not None):
                     fetched = collection.query.fetch_objects(limit=10, filters=filter_fullpath)
                 if fetched.objects:
                     for o in fetched.objects:
-                        search_results.append({
-                            **o.properties
-                        })
-                    # Sort by page_number ascending to favor first page content like names/titles
+                        search_results.append({**o.properties})
                     search_results.sort(key=lambda x: int(x.get("page_number", 9999)))
             except Exception:
                 pass
 
-        # If still nothing, fetch broadly and filter client-side by matching basename/full path suffix
         if not search_results and source:
             try:
                 broad = collection.query.fetch_objects(limit=100)
@@ -138,7 +161,6 @@ class RAGService:
             except Exception:
                 pass
 
-        # Redundant safety filter (post-query)
         if source and search_results:
             src_name = os.path.basename(source)
             search_results = [
@@ -149,18 +171,13 @@ class RAGService:
         # 3. Reranking
         if not search_results:
             return "No results found.", [], self._new_trace_id(), 0.0
-            
-        cross_inp = [[query, result["content"]] for result in search_results]
-        cross_scores = self.reranker.predict(cross_inp).tolist()
-
+        docs = [r["content"] for r in search_results]
+        cross_scores = self._rerank(query, docs)
         for result, score in zip(search_results, cross_scores):
-            result["rerank_score"] = score
+            result["rerank_score"] = float(score)
+        reranked_results = sorted(search_results, key=lambda x: x["rerank_score"], reverse=True)
 
-        reranked_results = sorted(
-            search_results, key=lambda x: x["rerank_score"], reverse=True
-        )
-
-        # Dedupe results by (source, page_number, content)
+        # Dedupe
         def _dedupe(results: List[dict]) -> List[dict]:
             seen: set[tuple[str, int, str]] = set()
             unique: List[dict] = []
@@ -171,14 +188,12 @@ class RAGService:
                 seen.add(key)
                 unique.append(r)
             return unique
-
         reranked_results = _dedupe(reranked_results)
 
-        # 4. Prompt Construction (with PII redaction on context)
+        # 4. Prompt
         top_k = 3
         selected = reranked_results[:top_k]
         redacted_context_parts: List[str] = []
-        # If strict privacy, always redact PERSON. Otherwise allow identity questions to show names.
         lower_q = query.lower()
         skip_entities: list[str] = []
         if not strict_privacy and any(word in lower_q for word in ["author", "who is", "who's", "person", "name"]):
@@ -186,9 +201,7 @@ class RAGService:
         for result in selected:
             content = result["content"]
             redacted_content = self.pii_service.redact_text(content, skip_entities=skip_entities)
-            redacted_context_parts.append(
-                f"Source: {result['source']}, Page: {result['page_number']}\nContent: {redacted_content}"
-            )
+            redacted_context_parts.append(f"Source: {result['source']}, Page: {result['page_number']}\nContent: {redacted_content}")
         context = "\n".join(redacted_context_parts)
         prompt = f"""
         You are the Compliance Copilot. Answer the user's query based on the following context.
@@ -202,7 +215,6 @@ class RAGService:
         Answer:
         """
 
-        # 5. LLM Call
         llm_response = self.openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -212,35 +224,28 @@ class RAGService:
             temperature=0.0,
         )
         raw_answer = llm_response.choices[0].message.content or "No answer found."
-
-        # 6. Redact final answer for any residual PII and log
         answer = self.pii_service.redact_text(raw_answer, skip_entities=skip_entities)
 
-        # Redact citation text as well for strict privacy
         citations = [
             Citation(
                 source=result["source"],
                 page_number=result["page_number"],
                 text=self.pii_service.redact_text(result["content"], skip_entities=skip_entities) if strict_privacy else result["content"],
-                score=result["rerank_score"],
+                score=float(result["rerank_score"]),
             )
             for result in reranked_results[:top_k]
         ]
 
-        # 7. Compute a simple groundedness proxy (normalized avg rerank score)
         import math
         scores = [max(-20.0, min(20.0, float(r.get("rerank_score", 0.0)))) for r in reranked_results[:top_k]]
         if scores:
-            # softmax over top_k rerank scores
             exps = [math.exp(s - max(scores)) for s in scores]
             sm = [e / (sum(exps) or 1.0) for e in exps]
             groundedness = float(sum(sm) / len(sm))
         else:
             groundedness = 0.0
 
-        # 8. Trace id (simple uuid)
         trace_id = self._new_trace_id()
-
         return answer, citations, trace_id, groundedness
 
     def _new_trace_id(self) -> str:

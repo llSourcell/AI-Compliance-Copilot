@@ -13,12 +13,17 @@ from weaviate.exceptions import WeaviateBatchError
 from tenacity import retry, stop_after_attempt, wait_fixed
 import os
 from urllib.parse import urlparse
+from openai import OpenAI
 
 
 class IngestionService:
     def __init__(self):
         self.weaviate_client = self._connect_with_retry()
-        self.embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL, device="cpu")
+        self.use_openai_embeddings = bool(settings.USE_OPENAI_EMBEDDINGS)
+        if self.use_openai_embeddings:
+            self.openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        else:
+            self.embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL, device="cpu")
         self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
         self.collection_name = "ComplianceDocument"
         self._create_schema()
@@ -41,6 +46,12 @@ class IngestionService:
         ))
         client.connect()
         return client
+
+    def _embed_many(self, texts: list[str]) -> list[list[float]]:
+        if self.use_openai_embeddings:
+            out = self.openai_client.embeddings.create(model="text-embedding-3-large", input=texts)
+            return [d.embedding for d in out.data]
+        return self.embedding_model.encode(texts, show_progress_bar=True, normalize_embeddings=True).tolist()
 
     def _create_schema(self) -> None:
         if not self.weaviate_client.collections.exists(self.collection_name):
@@ -111,11 +122,8 @@ class IngestionService:
         if not chunks_with_metadata:
             return f"No text could be extracted from {file_path}."
 
-        embeddings = self.embedding_model.encode(
-            [item["content"] for item in chunks_with_metadata], 
-            show_progress_bar=True,
-            normalize_embeddings=True
-        )
+        texts = [item["content"] for item in chunks_with_metadata]
+        embeddings = self._embed_many(texts)
 
         collection = self.weaviate_client.collections.get(self.collection_name)
 
@@ -135,7 +143,7 @@ class IngestionService:
             else:
                 return f"Ingestion failed with error: {e}"
 
-        # Fallback: re-insert individually with small fixed-size batches (handles silent partial failures)
+        # Fallback: re-insert individually
         try:
             import time
             with collection.batch.fixed_size(1) as single:
@@ -148,10 +156,8 @@ class IngestionService:
                             time.sleep(0.5)
                             continue
         except Exception:
-            # Ignore; best-effort fallback
             pass
 
-        # Store stats for response enrichment via endpoint
         self._last_chunks_count = len(chunks_with_metadata)  # type: ignore[attr-defined]
         self._last_ocr_pages = ocr_pages  # type: ignore[attr-defined]
         return file_path
