@@ -94,6 +94,27 @@ To run tests with coverage:
 poetry run pytest --cov=src
 ```
 
+## RAG Evaluation (Ragas)
+
+Evaluate the pipeline on a golden dataset to produce faithfulness, answer_relevancy, and context_precision scores.
+
+1) Prepare `golden_dataset.csv` with columns: `question,ground_truth_answer`.
+
+2) Ensure the API is running and `OPENAI_API_KEY` is set.
+
+3) Run the evaluator:
+
+```bash
+poetry run python -m src.scripts.evaluate \
+  --csv /absolute/path/to/golden_dataset.csv \
+  --api-base http://localhost:8000 \
+  --source your.pdf \
+  --model gpt-4o-mini \
+  --threshold 0.85
+```
+
+This prints aggregate scores, a PASS/FAIL quality gate, and writes a per-sample report CSV next to the input file.
+
 ## Project Structure
 
 ```

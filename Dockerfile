@@ -10,7 +10,7 @@ ENV POETRY_NO_INTERACTION=1 \
 
 COPY pyproject.toml poetry.lock* ./
 
-RUN apt-get update && apt-get install -y tesseract-ocr && rm -rf /var/lib/apt/lists/* && \
+RUN apt-get update && apt-get install -y tesseract-ocr build-essential g++ && rm -rf /var/lib/apt/lists/* && \
     pip install poetry && \
     poetry lock && \
     poetry install --only main --no-root && \
