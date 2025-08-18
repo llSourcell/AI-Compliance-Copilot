@@ -12,6 +12,7 @@ import weaviate.classes as wvc
 from weaviate.exceptions import WeaviateBatchError
 from tenacity import retry, stop_after_attempt, wait_fixed
 import os
+from urllib.parse import urlparse
 
 
 class IngestionService:
@@ -24,6 +25,12 @@ class IngestionService:
 
     @retry(stop=stop_after_attempt(10), wait=wait_fixed(2))
     def _connect_with_retry(self):
+        weaviate_url = os.environ.get("WEAVIATE_URL", "").strip()
+        if weaviate_url:
+            client = weaviate.WeaviateClient(ConnectionParams.from_url(weaviate_url))
+            client.connect()
+            return client
+        # docker-compose fallback
         client = weaviate.WeaviateClient(ConnectionParams.from_params(
             http_host="weaviate",
             http_port=8080,

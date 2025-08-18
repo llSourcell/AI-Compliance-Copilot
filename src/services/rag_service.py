@@ -8,6 +8,7 @@ from weaviate.connect import ConnectionParams
 from tenacity import retry, stop_after_attempt, wait_fixed
 import weaviate.classes as wvc
 from src.services.pii_service import PIIRedactionService
+import os
 
 class RAGService:
     def __init__(self, pii_service: PIIRedactionService | None = None):
@@ -20,6 +21,11 @@ class RAGService:
 
     @retry(stop=stop_after_attempt(10), wait=wait_fixed(2))
     def _connect_with_retry(self):
+        weaviate_url = os.environ.get("WEAVIATE_URL", "").strip()
+        if weaviate_url:
+            client = weaviate.WeaviateClient(ConnectionParams.from_url(weaviate_url))
+            client.connect()
+            return client
         client = weaviate.WeaviateClient(ConnectionParams.from_params(
             http_host="weaviate",
             http_port=8080,
@@ -43,7 +49,6 @@ class RAGService:
         filter_fullpath = None
         src_name = None
         if source:
-            import os
             src_name = os.path.basename(source)
             filter_basename = wvc.query.Filter.by_property("source").equal(src_name)
             filter_fullpath = wvc.query.Filter.by_property("source").equal(source)
@@ -77,9 +82,8 @@ class RAGService:
                     result['score'] = o.metadata.score
                     search_results.append(result)
 
-        # Fallback hybrid without filter
+        # Fallback hybrid with fullpath
         if not search_results and filter_fullpath is not None:
-            # Try fullpath filter
             response = run_hybrid(alpha=0.5, filters=filter_fullpath)
             if response.objects:
                 for o in response.objects:
@@ -119,7 +123,6 @@ class RAGService:
                 broad = collection.query.fetch_objects(limit=100)
                 candidates: list[dict] = []
                 if broad.objects:
-                    import os
                     src_name = os.path.basename(source)
                     for o in broad.objects:
                         props = o.properties or {}
@@ -137,7 +140,6 @@ class RAGService:
 
         # Redundant safety filter (post-query)
         if source and search_results:
-            import os
             src_name = os.path.basename(source)
             search_results = [
                 r for r in search_results
