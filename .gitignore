@@ -1,3 +1,17 @@
+__pycache__/
+.pytest_cache/
+.venv/
+*.pyc
+*.pyo
+*.DS_Store
+node_modules/
+frontend/.next/
+weaviate_data/
+*.log
+*.coverage
+coverage.xml
+dist/
+build/
 # Environments
 .env
 .venv
