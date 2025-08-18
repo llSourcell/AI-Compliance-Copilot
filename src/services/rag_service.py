@@ -1,5 +1,9 @@
 import weaviate
-from sentence_transformers import CrossEncoder, SentenceTransformer
+try:
+    from sentence_transformers import CrossEncoder, SentenceTransformer  # optional
+except Exception:  # pragma: no cover
+    CrossEncoder = None  # type: ignore
+    SentenceTransformer = None  # type: ignore
 from openai import OpenAI
 from src.core.config import settings
 from src.models.api import Citation
@@ -16,11 +20,11 @@ class RAGService:
         self.openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
         # Embeddings backend
         self.use_openai_embeddings = bool(settings.USE_OPENAI_EMBEDDINGS)
-        if not self.use_openai_embeddings:
+        if not self.use_openai_embeddings and SentenceTransformer is not None:
             self.embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL, device="cpu")
         # Reranker backend
         self.use_openai_reranker = bool(settings.USE_OPENAI_RERANKER)
-        if not self.use_openai_reranker:
+        if not self.use_openai_reranker and CrossEncoder is not None:
             self.reranker = CrossEncoder(settings.RERANKER_MODEL)
         self.collection_name = "ComplianceDocument"
         self.pii_service = pii_service or PIIRedactionService()
