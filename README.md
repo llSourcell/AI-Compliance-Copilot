@@ -84,7 +84,7 @@ poetry run python -m src.scripts.evaluate \
 ```
 Outputs aggregate scores and a PASS/FAIL quality gate.
 
-## Hiring context
+## Security/Compliance context
 This repository showcases how I build “trustworthy AI” systems:
 - I make retrieval auditable (citations), answers grounded, and privacy non‑negotiable.
 - I design for production: clear modules, typed APIs, resilience, and graceful fallbacks.
