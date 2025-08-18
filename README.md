@@ -1,109 +1,79 @@
 # Compliance Copilot
 
-Enterprise-grade RAG application for compliance.
+An enterprise, “glass‑box” RAG system engineered for truth, privacy, and production. It ingests PDFs, retrieves with hybrid search + reranking, generates answers with strict citations, and enforces configurable PII redaction — all with observability hooks to prove what the model saw and why.
 
-## Tech Stack
+### Why this project matters
+- Transparency by design: verifiable, deduplicated citations and a per‑answer groundedness signal.
+- Privacy first: configurable PERSON/EMAIL/IP redaction in contexts, answers, and citations.
+- Production readiness: typed FastAPI, clean services, tests/linting, containerized, and deployable to common PaaS.
 
-- **Backend:** Python 3.11+, FastAPI
-- **Frontend:** Next.js 14 (React), Tailwind CSS
-- **Dependency Management:** Poetry
-- **Vector DB:** Weaviate
-- **QA:** `pytest`, `mypy`, `ruff`, `pre-commit`
-- **Deployment:** Docker, Docker Compose
-- **CI/CD:** GitHub Actions
+## Highlights
+- Retrieval: Weaviate hybrid search (vector+BM25) with robust fallbacks; optional in‑memory store for constrained PaaS.
+- Reranking: Cross‑encoder or hosted embeddings cosine proxy (batched) for low‑latency deployments.
+- PII: Microsoft Presidio integration with a safe regex fallback; strict‑privacy toggle end‑to‑end.
+- Observability: response includes `trace_id` and a groundedness proxy derived from rerank scores.
 
-## Setup and Installation
+## Quickstart
 
-### Prerequisites
-
-- Python 3.11+
-- Poetry
-- Docker and Docker Compose
-- Node.js and npm (for frontend)
-
-### 1. Clone the repository
-
+1) Clone and enter
 ```bash
-git clone <repository-url>
-cd compliance-copilot
+git clone https://github.com/llSourcell/AI-Compliance-Copilot.git
+cd AI-Compliance-Copilot
 ```
 
-### 2. Install backend dependencies
-
-Install the project dependencies using Poetry.
-
+2) Backend (FastAPI)
 ```bash
 poetry install
+OPENAI_API_KEY=... poetry run uvicorn src.main:app --host 0.0.0.0 --port 8000
 ```
+API docs: `http://localhost:8000/docs`
 
-### 3. Install frontend dependencies
-
-Navigate to the `frontend` directory and install Node.js dependencies.
-
+3) Frontend (optional local UI)
 ```bash
-cd frontend
-npm install
-cd ..
+cd frontend && npm install && npm run dev
+# Open http://localhost:3000  (set NEXT_PUBLIC_API_BASE if needed)
 ```
 
-### 4. Set up pre-commit hooks
-
-Install the pre-commit hooks to ensure code quality.
-
+4) Ingest + Query (CLI)
 ```bash
-poetry run pre-commit install
+# Ingest a PDF
+curl -sS -X POST http://localhost:8000/api/v1/ingest -H 'Expect:' \
+  -F 'file=@/absolute/path/to/your.pdf;type=application/pdf'
+
+# Query with strict privacy ON
+curl -sS -X POST http://localhost:8000/api/v1/query -H 'Content-Type: application/json' \
+  -d '{"query":"who is the author?","source":"your.pdf","strict_privacy":true}'
 ```
 
-## Running the Application
-
-### Using Docker Compose (Backend)
-
-This is the recommended way to run the backend application for development.
-
-```bash
-docker compose up --build
+## Architecture (at a glance)
+```
+src/
+  main.py                 # FastAPI app, CORS, health, minimal HTML UI
+  api/v1/endpoints.py     # /ingest, /query
+  services/
+    ingestion_service.py  # PDF parse (pypdf), split, embed, write to store
+    rag_service.py        # hybrid search, rerank, prompt, citations, groundedness
+    pii_service.py        # Presidio/regex redaction with audit logs
+  models/api.py           # Pydantic request/response models
+  core/config.py          # env-driven settings
 ```
 
-The API will be available at `http://localhost:8000/docs`.
+Data flow
+- Ingest: PDF → text extraction → recursive splitter → embeddings → store (Weaviate or in‑memory).
+- Query: user question → hybrid search → rerank → redact context (policy) → answer with citations → redact answer (policy) → return `answer`, `citations[]`, `trace_id`, `groundedness`.
 
-### Running the Frontend Application
+## Privacy, Tracing, and Observability
+- **Strict privacy** (default ON): redact PERSON/EMAIL/IP in contexts, citations, and the final answer.
+- **Redacted citations**: prevents accidental PII leakage through the UI.
+- **Trace ID**: each response carries a UUID for correlation in logs and dashboards.
+- **Groundedness**: softmax‑normalized proxy built from reranker scores of cited contexts (0–1).
 
-After starting the backend, navigate to the `frontend` directory and start the Next.js development server.
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-The frontend application will be available at `http://localhost:3000` (or `3001`).
-
-Set `NEXT_PUBLIC_API_BASE` in `frontend/.env.local` to point to your API if different from the default `http://localhost:8000`.
-
-### Running tests
-
-To run the test suite:
-
-```bash
-poetry run pytest
-```
-
-To run tests with coverage:
-
-```bash
-poetry run pytest --cov=src
-```
+## Quality & Tooling
+- Tests: `pytest` • Types: `mypy` • Lint/Format: `ruff` • Hooks: `pre‑commit`.
+- Containerized via Docker; CI pipeline ready to lint and test.
 
 ## RAG Evaluation (Ragas)
-
-Evaluate the pipeline on a golden dataset to produce faithfulness, answer_relevancy, and context_precision scores.
-
-1) Prepare `golden_dataset.csv` with columns: `question,ground_truth_answer`.
-
-2) Ensure the API is running and `OPENAI_API_KEY` is set.
-
-3) Run the evaluator:
-
+Evaluate faithfulness, answer relevancy, and context precision on a golden set.
 ```bash
 poetry run python -m src.scripts.evaluate \
   --csv /absolute/path/to/golden_dataset.csv \
@@ -112,78 +82,12 @@ poetry run python -m src.scripts.evaluate \
   --model gpt-4o-mini \
   --threshold 0.85
 ```
+Outputs aggregate scores and a PASS/FAIL quality gate.
 
-This prints aggregate scores, a PASS/FAIL quality gate, and writes a per-sample report CSV next to the input file.
+## Hiring context
+This repository showcases how I build “trustworthy AI” systems:
+- I make retrieval auditable (citations), answers grounded, and privacy non‑negotiable.
+- I design for production: clear modules, typed APIs, resilience, and graceful fallbacks.
+- I optimize for realities of deployment (PaaS limits, latency) without sacrificing correctness.
 
-## Project Structure
-
-```
-. 
-├── .github/workflows/ci.yml
-├── .gitignore
-├── .pre-commit-config.yaml
-├── docker-compose.yml
-├── Dockerfile
-├── mypy.ini
-├── poetry.lock
-├── pyproject.toml
-├── README.md
-├── frontend
-│   ├── app
-│   ├── package.json
-│   └── tailwind.config.ts
-├── src
-│   ├── api
-│   │   └── v1
-│   │       └── endpoints.py
-│   ├── core
-│   │   └── config.py
-│   ├── main.py
-│   ├── models
-│   │   └── api.py
-│   └── services
-│       ├── ingestion_service.py
-│       ├── pii_service.py
-│       └── rag_service.py
-└── tests
-    └── test_main.py
-```
-
-## Privacy, Tracing, and Observability
-
-- Strict Privacy (default ON):
-  - Request body supports `strict_privacy: true | false` (default: true)
-  - With strict privacy ON, PERSON/EMAIL/IP are redacted in: retrieved context, final answer, and citations.
-  - With strict privacy OFF, identity questions (e.g., "who is the author?") may reveal names.
-
-- Redacted Citations:
-  - Citation `text` is redacted under strict privacy to prevent PII leakage in the UI.
-
-- Trace and Groundedness:
-  - Each `/query` response returns `trace_id` (UUID) to correlate logs/observability.
-  - `groundedness` is a simple softmax-normalized proxy score based on reranker scores of the cited contexts (0.0–1.0).
-
-## API Reference (Selected)
-
-- POST `/api/v1/ingest`: multipart form upload (`file`) → returns `{ message, document_id, chunks_count, ocr_pages_count }`.
-
-- POST `/api/v1/query`:
-  - Request: `{ "query": str, "source": str|null, "strict_privacy": bool }`
-  - Response: `{ "answer": str, "citations": Citation[], "trace_id": str, "groundedness": float }`
-  - `Citation`: `{ source: str, page_number: int, text: str, score: float }`
-
-## Local cURL Examples
-
-```bash
-# Ingest a PDF
-curl -sS -X POST http://localhost:8000/api/v1/ingest -H 'Expect:' \
-  -F 'file=@/absolute/path/to/your.pdf;type=application/pdf'
-
-# Query with strict privacy ON (redacts names/emails/IPs everywhere)
-curl -sS -X POST http://localhost:8000/api/v1/query -H 'Content-Type: application/json' \
-  -d '{"query":"who is the author?","source":"your.pdf","strict_privacy":true}'
-
-# Query with strict privacy OFF (allows revealing names for identity questions)
-curl -sS -X POST http://localhost:8000/api/v1/query -H 'Content-Type: application/json' \
-  -d '{"query":"who is the author?","source":"your.pdf","strict_privacy":false}'
-```
+If you’re hiring for AI/LLM engineering: let’s build systems your compliance and security teams love as much as your users do.
