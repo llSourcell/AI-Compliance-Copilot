@@ -1,7 +1,4 @@
 import weaviate
-import fitz  # PyMuPDF
-import pytesseract
-from PIL import Image
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 from src.core.config import settings
@@ -66,29 +63,20 @@ class IngestionService:
             )
 
     def ingest_document(self, file_path: str) -> str:
+        # Lightweight PDF text extraction using pypdf (Heroku-friendly)
         try:
-            doc = fitz.open(file_path)
+            import pypdf
+            reader = pypdf.PdfReader(file_path)
             page_texts: List[str] = []
             ocr_pages = 0
-            for page in doc:
-                text = page.get_text("text") or ""
-                if len(text.strip()) < 10:
-                    # OCR fallback for image-only pages
-                    pix = page.get_pixmap(alpha=False)
-                    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                    ocr_text = pytesseract.image_to_string(img, config='--oem 1 --psm 6') or ""
-                    text = ocr_text
-                    if ocr_text.strip():
-                        ocr_pages += 1
+            for page in reader.pages:
+                text = page.extract_text() or ""
                 page_texts.append(text)
-
-            # Extract PDF metadata (if present)
-            metadata = doc.metadata or {}
-            author = metadata.get("author") or metadata.get("Author")
-            title = metadata.get("title") or metadata.get("Title")
-            subject = metadata.get("subject") or metadata.get("Subject")
-            keywords = metadata.get("keywords") or metadata.get("Keywords")
-            doc.close()
+            metadata = reader.metadata or {}
+            author = getattr(metadata, "author", None) or metadata.get("/Author") if isinstance(metadata, dict) else None
+            title = getattr(metadata, "title", None) or metadata.get("/Title") if isinstance(metadata, dict) else None
+            subject = getattr(metadata, "subject", None) or metadata.get("/Subject") if isinstance(metadata, dict) else None
+            keywords = getattr(metadata, "keywords", None) or metadata.get("/Keywords") if isinstance(metadata, dict) else None
         except Exception as e:
             return f"Error reading file {file_path}: {e}"
 
